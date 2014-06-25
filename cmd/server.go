@@ -1,8 +1,8 @@
 package main
 
 import (
-	"log"
 	"lmail"
+	"log"
 )
 
 func main() {

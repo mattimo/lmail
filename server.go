@@ -1,24 +1,27 @@
 package lmail
 
 import (
+	"bytes"
+	"fmt"
 	"log"
 	"net"
-	"net/textproto"
 	"net/mail"
+	"net/textproto"
 	"strings"
-	"fmt"
 	"time"
-	"bytes"
 )
 
 // servers name as stated in the initial connect 250
 const serverName string = "ini1.ini.physik.tu-berlin.de"
+
 // preliminary location to store extension list supported by the server
 var extensions []string = []string{"8BITMIME", "SIZE"}
+
 // The server timour is set to 5 minuted as proposed in rfc5321 4.5.3.2.7.
-const timeoutTime time.Duration = 5*time.Minute
+const timeoutTime time.Duration = 5 * time.Minute
+
 // Processing time out is set to 8 hours because it seems reasonable
-const processingTimeout time.Duration = 8*time.Hour
+const processingTimeout time.Duration = 8 * time.Hour
 
 type session struct {
 	// raw network connection
@@ -44,7 +47,6 @@ type session struct {
 	Rcpt []string
 	// Mail Data
 	data bytes.Buffer
-
 }
 
 func NewSession(conn net.Conn) *session {
@@ -60,7 +62,7 @@ func NewSession(conn net.Conn) *session {
 }
 
 func (s *session) reset() {
-	s.active  = true
+	s.active = true
 	s.pastHello = false
 	s.timedout = false
 	s.HelloName = ""
@@ -145,7 +147,7 @@ func (s *session) handleMail(args []string) {
 		return
 	}
 	k, v, err := getTouple(args[1])
-	defer func(){
+	defer func() {
 		if err != nil {
 			s.Cmd(553, "mailbox syntax incorrect")
 		} else {
@@ -179,7 +181,7 @@ func (s *session) handleRcpt(args []string) {
 		return
 	}
 	k, v, err := getTouple(args[1])
-	defer func(){
+	defer func() {
 		if err != nil {
 			s.Cmd(553, "mailbox syntax incorrect")
 		} else {
@@ -208,9 +210,9 @@ func (s *session) handleRcpt(args []string) {
 // compare list of RCPTs with recepients found in MIME header
 // return true if all recepients could be found in either list, false if not.
 // Error contains how many recepients could not be matched.
-func (s *session) rcptMimeMatch(header textproto.MIMEHeader) (bool, error ){
+func (s *session) rcptMimeMatch(header mail.Header) (bool, error) {
 	// unique recepients, bool is false if key was not found in MIME header
-	uRecepients := make(map[string] bool)
+	uRecepients := make(map[string]bool)
 	// list of destination field names
 	fields := []string{"To", "Cc", "Bcc"}
 	// mismatch counter
@@ -218,11 +220,11 @@ func (s *session) rcptMimeMatch(header textproto.MIMEHeader) (bool, error ){
 	for _, rcpt := range s.Rcpt {
 		uRecepients[rcpt] = false
 		for _, key := range fields {
-			for _, destination := range header[key] {
-				addr, err := mail.ParseAddress(destination)
-				if err != nil {
-					continue
-				}
+			addresses, err := header.AddressList(key)
+			if err != nil {
+				continue
+			}
+			for _, addr := range addresses {
 				// check if exists and write appropriate value into fields
 				if _, ok := uRecepients[addr.Address]; ok {
 					uRecepients[addr.Address] = true
@@ -244,7 +246,6 @@ func (s *session) rcptMimeMatch(header textproto.MIMEHeader) (bool, error ){
 }
 
 func (s *session) handleData(args []string) {
-	// TODO: implement
 	if s.From == "" {
 		s.Cmd(503, "FROM sequence must come before DATA")
 		return
@@ -254,26 +255,35 @@ func (s *session) handleData(args []string) {
 		return
 	}
 	s.Cmd(354, "Ready to receive mails end with single . line")
-	if false {
-	header, err := s.text.ReadMIMEHeader()
-	if err != nil {
-		s.Cmd(550, "Error reading data")
-	}
-	// verify that MIME header matches RCPTs
-	ok, err := s.rcptMimeMatch(header)
-	if !ok {
-		s.Cmd(550, err.Error())
-	}
-}
+
 	dataReader := s.text.DotReader()
-//	time.Sleep(10*time.Second)
+	var readError error
 	n, err := s.data.ReadFrom(dataReader)
 	if err != nil {
-		s.Cmd(550, "Error reading data")
+		log.Println("Error reading from con:", err)
+		readError = fmt.Errorf("Error reading data")
 		return
 	}
+
+	msg, err := mail.ReadMessage(&s.data)
+	if err != nil {
+		log.Println("Error reading message", err)
+		readError = fmt.Errorf("Error reading data")
+
+	}
+	ok, err := s.rcptMimeMatch(msg.Header)
+	if !ok {
+		log.Println("Error matching MIME:", err)
+		readError = fmt.Errorf("Error reading data")
+	}
+
 	log.Printf("Read %d bytes from client %s", n, s.Client)
-	s.Cmd(250, "OK")
+
+	if readError != nil {
+		s.Cmd(550, readError.Error())
+	} else {
+		s.Cmd(250, "OK")
+	}
 }
 
 func (s *session) handleRset(args []string) {
@@ -286,7 +296,7 @@ func (s *session) handleNoop(args []string) {
 }
 
 func (s *session) handleVrfy(args []string) {
-	// TODO: implement real vrfy, just pretend that we prohibit this 
+	// TODO: implement real vrfy, just pretend that we prohibit this
 	// behaviour by policy
 	s.Cmd(252, "Administrative prohibition")
 }
@@ -332,50 +342,50 @@ func handleConnection(conn net.Conn) {
 		}
 		// handle stateless commands
 		switch args[0] {
-			case "RSET":
-				s.handleRset(args)
-				continue
-			case "NOOP":
-				s.handleNoop(args)
-				continue
-			case "QUIT":
-				s.active = false
-				s.Cmd(221, "Closing transmission channel")
-				s.Close()
-				return
-			case "VRFY":
-				s.handleVrfy(args)
-				continue
+		case "RSET":
+			s.handleRset(args)
+			continue
+		case "NOOP":
+			s.handleNoop(args)
+			continue
+		case "QUIT":
+			s.active = false
+			s.Cmd(221, "Closing transmission channel")
+			s.Close()
+			return
+		case "VRFY":
+			s.handleVrfy(args)
+			continue
 		}
 		if s.pastHello {
 			switch args[0] {
-				case "MAIL":
-					s.handleMail(args)
-					continue
-				case "RCPT":
-					s.handleRcpt(args)
-					continue
-				case "DATA":
-					s.handleData(args)
-					log.Printf("%#v", s)
-					fmt.Printf("Mail:\n %s", s.data)
-					continue
-				default:
-					s.Cmd(500, "Syntax error, command unrecognized")
-					continue
+			case "MAIL":
+				s.handleMail(args)
+				continue
+			case "RCPT":
+				s.handleRcpt(args)
+				continue
+			case "DATA":
+				s.handleData(args)
+				log.Printf("%#v", s)
+				fmt.Printf("Mail:\n %s", s.data)
+				continue
+			default:
+				s.Cmd(500, "Syntax error, command unrecognized")
+				continue
 			}
 		} else {
 			switch args[0] {
-				case "EHLO":
-					log.Println("Initiated ne EHLO session")
-					s.handleEhlo(args)
-					continue
-				case "HELO":
-					log.Println("Initiated ne HELO session")
-					s.handleHelo(args)
-					continue
-				default:
-					s.Cmd(503, "Hello must come before anything else")
+			case "EHLO":
+				log.Println("Initiated ne EHLO session")
+				s.handleEhlo(args)
+				continue
+			case "HELO":
+				log.Println("Initiated ne HELO session")
+				s.handleHelo(args)
+				continue
+			default:
+				s.Cmd(503, "Hello must come before anything else")
 			}
 		}
 	}
