@@ -1,12 +1,12 @@
 package lmail
 
 import (
-	"bytes"
 	"fmt"
 	"log"
 	"net"
 	"net/mail"
 	"net/textproto"
+	"os"
 	"strings"
 	"time"
 )
@@ -22,6 +22,9 @@ const timeoutTime time.Duration = 5 * time.Minute
 
 // Processing time out is set to 8 hours because it seems reasonable
 const processingTimeout time.Duration = 8 * time.Hour
+
+// Maildir instance, shall contain folder name
+var maildir *Maildir
 
 type session struct {
 	// raw network connection
@@ -46,7 +49,12 @@ type session struct {
 	// list of reciepents, TODO: for a large list of recepients use something else then this
 	Rcpt []string
 	// Mail Data
-	data bytes.Buffer
+	data *os.File
+	// Mail data storage
+	dataFile string
+
+	// Func calls
+	Deliver func()
 }
 
 func NewSession(conn net.Conn) *session {
@@ -55,6 +63,7 @@ func NewSession(conn net.Conn) *session {
 		text: textproto.NewConn(conn),
 	}
 	s.reset()
+	s.Deliver = s.deliver
 
 	s.timeout = time.AfterFunc(timeoutTime, s.Close)
 	return s
@@ -62,6 +71,7 @@ func NewSession(conn net.Conn) *session {
 }
 
 func (s *session) reset() {
+	s.FileClose()
 	s.active = true
 	s.pastHello = false
 	s.timedout = false
@@ -70,12 +80,29 @@ func (s *session) reset() {
 	s.Rcpt = []string{}
 }
 
+func (s *session) FileClose() {
+	if s.data != nil {
+		_ = s.data.Close()
+	}
+}
+
+func (s *session) FileDelete() {
+	if s.data == nil {
+		return
+	}
+	filename := s.data.Name()
+	s.data.Close()
+	os.Remove(filename)
+}
+
 func (s *session) ResetTimeout() {
 	s.timeout.Reset(timeoutTime)
 }
 
 func (s *session) Close() {
+	s.Deliver()
 	s.timedout = true
+	s.timeout.Stop()
 	err := s.text.Close()
 	if err != nil {
 		log.Println("Erro failed to close Session:", err)
@@ -93,6 +120,12 @@ func getTouple(field string) (string, string, error) {
 func getAddress(value string) string {
 	value = strings.TrimLeft(value, "<")
 	return strings.TrimRight(value, ">")
+}
+
+func (s *session) handleClose() {
+	s.active = false
+	s.Cmd(221, "OK")
+	s.Close()
 }
 
 func (s *session) handleHelo(args []string) {
@@ -256,34 +289,38 @@ func (s *session) handleData(args []string) {
 	}
 	s.Cmd(354, "Ready to receive mails end with single . line")
 
-	dataReader := s.text.DotReader()
 	var readError error
-	n, err := s.data.ReadFrom(dataReader)
+	defer func() {
+		if readError != nil {
+			s.FileDelete()
+			s.Cmd(550, readError.Error())
+		} else {
+			s.Cmd(250, "OK")
+		}
+	}()
+	dataReader := s.text.DotReader()
+	//n, err := s.data.ReadFrom(dataReader)
+	n, file, err := maildir.StoreTmp(dataReader)
+	s.dataFile = file.Name()
 	if err != nil {
 		log.Println("Error reading from con:", err)
 		readError = fmt.Errorf("Error reading data")
 		return
 	}
-
-	msg, err := mail.ReadMessage(&s.data)
+	msg, err := mail.ReadMessage(file)
 	if err != nil {
 		log.Println("Error reading message", err)
 		readError = fmt.Errorf("Error reading data")
-
+		return
 	}
 	ok, err := s.rcptMimeMatch(msg.Header)
 	if !ok {
 		log.Println("Error matching MIME:", err)
 		readError = fmt.Errorf("Error reading data")
+		return
 	}
 
 	log.Printf("Read %d bytes from client %s", n, s.Client)
-
-	if readError != nil {
-		s.Cmd(550, readError.Error())
-	} else {
-		s.Cmd(250, "OK")
-	}
 }
 
 func (s *session) handleRset(args []string) {
@@ -320,6 +357,10 @@ func (s *session) serverHello(server string) {
 	s.Cmd(220, "%s ESMTP lmail", server)
 }
 
+func (s *session) deliver() {
+	maildir.Deliver(s.dataFile)
+}
+
 func handleConnection(conn net.Conn) {
 	s := NewSession(conn)
 	s.serverHello(serverName)
@@ -349,9 +390,7 @@ func handleConnection(conn net.Conn) {
 			s.handleNoop(args)
 			continue
 		case "QUIT":
-			s.active = false
-			s.Cmd(221, "Closing transmission channel")
-			s.Close()
+			s.handleClose()
 			return
 		case "VRFY":
 			s.handleVrfy(args)
@@ -388,10 +427,12 @@ func handleConnection(conn net.Conn) {
 				s.Cmd(503, "Hello must come before anything else")
 			}
 		}
+		go s.Deliver()
 	}
 }
 
 func Run() {
+	maildir = NewMaildir("maildir")
 	listen, err := net.Listen("tcp", ":2525")
 	if err != nil {
 		log.Fatal("Could not Listen")
