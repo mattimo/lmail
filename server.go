@@ -2,6 +2,7 @@ package lmail
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/mail"
@@ -26,6 +27,16 @@ const processingTimeout time.Duration = 8 * time.Hour
 // Maildir instance, shall contain folder name
 var maildir *Maildir
 
+// Mail Handlers Process Mails,
+type Handler interface {
+	// Handles Mails, gets passed a mail struct as an argument, and should return
+	// an smtp error, and an error object for all other errors.
+	// If the smtp error code is 0 or err is not nil it is ignored.
+	// if err is not nil, the server will respond with the appropriate
+	// error code or ignore the handler
+	HandleMail(*Mail) (int, error)
+}
+
 type session struct {
 	// raw network connection
 	conn net.Conn
@@ -40,30 +51,22 @@ type session struct {
 	// connection time out
 	timedout bool
 
-	// The name supplied by Client Hello
-	HelloName string
-	// Sender Reverse Lookup
-	Client string
-	// The from field, last ist best
-	From string
-	// list of reciepents, TODO: for a large list of recepients use something else then this
-	Rcpt []string
-	// Mail Data
-	data *os.File
-	// Mail data storage
-	dataFile string
+	// The mail the is beeing received.
+	mail *Mail
 
-	// Func calls
-	Deliver func()
+	// Delivery Function
+	handle func(*Mail) (int, error)
+	// Verify Function
+	Verify func(io.ReadWriter) (bool, error)
 }
 
 func NewSession(conn net.Conn) *session {
 	s := &session{
 		conn: conn,
 		text: textproto.NewConn(conn),
+		mail: &Mail{},
 	}
 	s.reset()
-	s.Deliver = s.deliver
 
 	s.timeout = time.AfterFunc(timeoutTime, s.Close)
 	return s
@@ -71,28 +74,9 @@ func NewSession(conn net.Conn) *session {
 }
 
 func (s *session) reset() {
-	s.FileClose()
 	s.active = true
 	s.pastHello = false
 	s.timedout = false
-	s.HelloName = ""
-	s.From = ""
-	s.Rcpt = []string{}
-}
-
-func (s *session) FileClose() {
-	if s.data != nil {
-		_ = s.data.Close()
-	}
-}
-
-func (s *session) FileDelete() {
-	if s.data == nil {
-		return
-	}
-	filename := s.data.Name()
-	s.data.Close()
-	os.Remove(filename)
 }
 
 func (s *session) ResetTimeout() {
@@ -100,7 +84,6 @@ func (s *session) ResetTimeout() {
 }
 
 func (s *session) Close() {
-	s.Deliver()
 	s.timedout = true
 	s.timeout.Stop()
 	err := s.text.Close()
@@ -154,7 +137,7 @@ func (s *session) replyExtensions(client string) {
 	} else {
 		name = names[0]
 	}
-	s.Client = name
+	s.mail.Client = name
 	s.Ecmd(250, "%s, Hello %s [%s]", serverName, name, rAddr)
 	for _, extension := range extensions[:1] {
 		s.Ecmd(250, extension)
@@ -202,7 +185,7 @@ func (s *session) handleMail(args []string) {
 		log.Println("MAIL: Error Parsing Address:", err)
 		return
 	}
-	s.From = from.Address
+	s.mail.From = from.Address
 	return
 
 }
@@ -235,7 +218,7 @@ func (s *session) handleRcpt(args []string) {
 		log.Println("RCPT: Error Parsing Address:", err)
 		return
 	}
-	s.Rcpt = append(s.Rcpt, rcpt.Address)
+	s.mail.Rcpts = append(s.mail.Rcpts, rcpt.Address)
 	return
 
 }
@@ -250,7 +233,7 @@ func (s *session) rcptMimeMatch(header mail.Header) (bool, error) {
 	fields := []string{"To", "Cc", "Bcc"}
 	// mismatch counter
 	count := 0
-	for _, rcpt := range s.Rcpt {
+	for _, rcpt := range s.mail.Rcpts {
 		uRecepients[rcpt] = false
 		for _, key := range fields {
 			addresses, err := header.AddressList(key)
@@ -279,11 +262,11 @@ func (s *session) rcptMimeMatch(header mail.Header) (bool, error) {
 }
 
 func (s *session) handleData(args []string) {
-	if s.From == "" {
+	if s.mail.From == "" {
 		s.Cmd(503, "FROM sequence must come before DATA")
 		return
 	}
-	if len(s.Rcpt) == 0 {
+	if len(s.mail.Rcpts) == 0 {
 		s.Cmd(503, "RCPT sequnce must come before DATA")
 		return
 	}
@@ -292,7 +275,7 @@ func (s *session) handleData(args []string) {
 	var readError error
 	defer func() {
 		if readError != nil {
-			s.FileDelete()
+			log.Println("Error during data receive")
 			s.Cmd(550, readError.Error())
 		} else {
 			s.Cmd(250, "OK")
@@ -300,27 +283,39 @@ func (s *session) handleData(args []string) {
 	}()
 	dataReader := s.text.DotReader()
 	//n, err := s.data.ReadFrom(dataReader)
-	n, file, err := maildir.StoreTmp(dataReader)
-	s.dataFile = file.Name()
+
+	err := s.mail.PutMessage(dataReader)
 	if err != nil {
 		log.Println("Error reading from con:", err)
 		readError = fmt.Errorf("Error reading data")
 		return
 	}
-	msg, err := mail.ReadMessage(file)
+	i, err := s.handle(s.mail)
 	if err != nil {
-		log.Println("Error reading message", err)
+		log.Println("Error reading from con:", err)
 		readError = fmt.Errorf("Error reading data")
-		return
 	}
-	ok, err := s.rcptMimeMatch(msg.Header)
-	if !ok {
-		log.Println("Error matching MIME:", err)
-		readError = fmt.Errorf("Error reading data")
-		return
+	if false {
+		_, file, err := maildir.StoreTmp(dataReader)
+		if err != nil {
+			log.Println("Error reading from con:", err)
+			readError = fmt.Errorf("Error reading data")
+			return
+		}
+		msg, err := mail.ReadMessage(file)
+		if err != nil {
+			log.Println("Error reading message", err)
+			readError = fmt.Errorf("Error reading data")
+			return
+		}
+		ok, err := s.rcptMimeMatch(msg.Header)
+		if !ok {
+			log.Println("Error matching MIME:", err)
+			readError = fmt.Errorf("Error reading data")
+			return
+		}
 	}
-
-	log.Printf("Read %d bytes from client %s", n, s.Client)
+	log.Printf("Read some bytes from client %d, %s,", i, s.mail.Client)
 }
 
 func (s *session) handleRset(args []string) {
@@ -357,13 +352,10 @@ func (s *session) serverHello(server string) {
 	s.Cmd(220, "%s ESMTP lmail", server)
 }
 
-func (s *session) deliver() {
-	maildir.Deliver(s.dataFile)
-}
-
-func handleConnection(conn net.Conn) {
+func (srv *Server) handleConnection(conn net.Conn) {
 	s := NewSession(conn)
-	s.serverHello(serverName)
+	s.serverHello(srv.Name)
+	s.handle = srv.Handler.HandleMail
 	for s.active {
 		// reset timeout to prevent clients from dangling around
 		s.ResetTimeout()
@@ -407,7 +399,6 @@ func handleConnection(conn net.Conn) {
 			case "DATA":
 				s.handleData(args)
 				log.Printf("%#v", s)
-				fmt.Printf("Mail:\n %s", s.data)
 				continue
 			default:
 				s.Cmd(500, "Syntax error, command unrecognized")
@@ -427,24 +418,59 @@ func handleConnection(conn net.Conn) {
 				s.Cmd(503, "Hello must come before anything else")
 			}
 		}
-		go s.Deliver()
 	}
 }
 
-func Run() {
-	maildir = NewMaildir("maildir")
-	listen, err := net.Listen("tcp", ":2525")
+type Server struct {
+	Addr    string  //TCP address to listen on, ":smtp" if empty
+	Handler Handler // handler to invoke, lmail.DefaultServeMux if nil
+	Name    string  // Server name, hostname if emtpy
+
+	// Error Logger, if nil logs are deferred.
+	ErrorLog *log.Logger
+}
+
+func (srv *Server) logf(format string, args ...interface{}) {
+	if srv.ErrorLog != nil {
+		srv.ErrorLog.Printf(format, args...)
+	} else {
+		log.Printf(format, args...)
+	}
+}
+
+func (srv *Server) ListenAndServe() error {
+	addr := srv.Addr
+	if addr == "" {
+		addr = ":smtp"
+	}
+	listen, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatal("Could not Listen")
 	}
+	return srv.Serve(listen)
+}
 
+func (srv *Server) Serve(l net.Listener) error {
+	defer l.Close()
+	if srv.Name == "" {
+		name, err := os.Hostname()
+		if err != nil {
+			return err
+		}
+		srv.Name = name
+	}
 	for {
-		conn, err := listen.Accept()
+		conn, err := l.Accept()
 		if err != nil {
 			log.Println("Error During Connect:", err)
 			continue
 		}
-		go handleConnection(conn)
+		go srv.handleConnection(conn)
 
 	}
+}
+
+func ListenAndServe(addr string, handler Handler) error {
+	srv := &Server{Addr: addr, Handler: handler}
+	return srv.ListenAndServe()
 }
