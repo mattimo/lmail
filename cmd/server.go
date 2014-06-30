@@ -1,8 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"lmail"
 	"log"
 )
@@ -12,11 +13,25 @@ type PrintHandler struct {
 }
 
 func (h *PrintHandler) HandleMail(mail *lmail.Mail) (int, error) {
-	fmt.Println(mail)
-	fmt.Println(mail.Msg)
-	buf := &bytes.Buffer{}
-	fmt.Println(buf.ReadFrom(mail.Raw))
-	fmt.Println(buf.String())
+	for i := 0; i < 5; i++ {
+		go func() {
+			fmt.Println(mail)
+			mail.PrintMbuf()
+			msg, err := mail.MimeMessage()
+			if err != nil {
+				log.Println("Error getting mail:", err)
+			}
+			fmt.Println("MIME MESSAGE_____________________\n", msg)
+			buf := make([]byte, 1024)
+			fmt.Println(mail.RawReader().Read(buf))
+			fmt.Printf("RAW MESSAGE______\n%s\n", buf)
+		}()
+	}
+	buf := make([]byte, 1024)
+	fmt.Println(mail.RawReader().Read(buf))
+	fmt.Printf("RAW MESSAGE______\n%s\n", buf)
+	n, err := io.Copy(ioutil.Discard, mail.RawReader())
+	log.Printf("Wrote %d bytes: %s", n, err)
 
 	return 250, nil
 }
