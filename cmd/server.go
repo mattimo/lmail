@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	//	"fmt"
 	"io"
 	"io/ioutil"
 	"lmail"
@@ -13,25 +13,25 @@ type PrintHandler struct {
 }
 
 func (h *PrintHandler) HandleMail(mail *lmail.Mail) (int, error) {
+	log.Printf("Handling new mail from %s", mail.Client)
 	for i := 0; i < 5; i++ {
 		go func() {
-			fmt.Println(mail)
-			mail.PrintMbuf()
-			msg, err := mail.MimeMessage()
+			_, err := mail.MimeMessage()
 			if err != nil {
 				log.Println("Error getting mail:", err)
 			}
-			fmt.Println("MIME MESSAGE_____________________\n", msg)
 			buf := make([]byte, 1024)
-			fmt.Println(mail.RawReader().Read(buf))
-			fmt.Printf("RAW MESSAGE______\n%s\n", buf)
+			mail.RawReader().Read(buf)
+			_, err = io.Copy(ioutil.Discard, mail.RawReader())
+			if err != nil {
+				log.Println("Error reading message:", err)
+			}
 		}()
 	}
-	buf := make([]byte, 1024)
-	fmt.Println(mail.RawReader().Read(buf))
-	fmt.Printf("RAW MESSAGE______\n%s\n", buf)
-	n, err := io.Copy(ioutil.Discard, mail.RawReader())
-	log.Printf("Wrote %d bytes: %s", n, err)
+	_, err := io.Copy(ioutil.Discard, mail.RawReader())
+	if err != nil {
+		log.Println("Error reading message:", err)
+	}
 
 	return 250, nil
 }

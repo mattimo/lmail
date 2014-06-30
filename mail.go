@@ -4,7 +4,6 @@ import (
 	//	"bufio"
 	"bytes"
 	"io"
-	"log"
 	"net/mail"
 	"sync"
 )
@@ -40,7 +39,6 @@ func (b *mailBuffer) Clone() *mailBuffer {
 // Opportunistic Reader, Reads from origin buffer iff the position has not
 // been read before.
 func (b *mailBuffer) Read(p []byte) (n int, err error) {
-	log.Printf("Reading up to %d bytes from buffer. pos=%d", len(p), b.pos)
 	b.rm.Lock()
 	n, err = b.tee.Read(p)
 	if err != nil {
@@ -51,7 +49,6 @@ func (b *mailBuffer) Read(p []byte) (n int, err error) {
 	}
 	if n > 0 && err != io.EOF {
 		b.pos = b.pos + int64(n)
-		log.Printf("Read %d bytes from sock. pos=%d", n, b.pos)
 		b.rm.Unlock()
 		return
 	}
@@ -62,7 +59,6 @@ func (b *mailBuffer) Read(p []byte) (n int, err error) {
 	b.rm.Unlock()
 	n, err = bytes.NewReader(data).ReadAt(p, b.pos)
 	b.pos = b.pos + int64(n)
-	log.Printf("Read %d bytes from buffer. pos=%d", n, b.pos)
 	return
 }
 
@@ -85,10 +81,6 @@ type Mail struct {
 	Raw io.Reader
 }
 
-func (m *Mail) PrintMbuf() {
-	//log.Printf("Raw mbuf: \n\t%+v", m.mailBuf.Clone())
-}
-
 func (m *Mail) PutMessage(raw io.Reader) (err error) {
 	m.mailBuf = newMailBuffer(raw)
 	return err
@@ -99,8 +91,11 @@ func (m *Mail) RawReader() io.Reader {
 }
 
 func (m *Mail) MimeMessage() (msg *mail.Message, err error) {
-	mailReader := m.RawReader()
-	msg, err = mail.ReadMessage(mailReader)
-	m.Msg = msg
-	return
+	if m.Msg == nil {
+		mailReader := m.RawReader()
+		msg, err = mail.ReadMessage(mailReader)
+		m.Msg = msg
+		return
+	}
+	return m.Msg, nil
 }

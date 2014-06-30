@@ -282,15 +282,14 @@ func (s *session) handleData(args []string) {
 		}
 	}()
 	dataReader := s.text.DotReader()
-	//n, err := s.data.ReadFrom(dataReader)
-
 	err := s.mail.PutMessage(dataReader)
 	if err != nil {
 		log.Println("Error reading from con:", err)
 		readError = fmt.Errorf("Error reading data")
 		return
 	}
-	i, err := s.handle(s.mail)
+	//TODO handle smtp error code
+	_, err = s.handle(s.mail)
 	if err != nil {
 		log.Println("Error reading from con:", err)
 		readError = fmt.Errorf("Error reading data")
@@ -315,7 +314,6 @@ func (s *session) handleData(args []string) {
 			return
 		}
 	}
-	log.Printf("Read some bytes from client %d, %s,", i, s.mail.Client)
 }
 
 func (s *session) handleRset(args []string) {
@@ -370,7 +368,6 @@ func (srv *Server) handleConnection(conn net.Conn) {
 		s.timeout.Reset(processingTimeout)
 		args := strings.Fields(line)
 		if len(args) == 0 {
-			log.Println(s)
 			continue
 		}
 		// handle stateless commands
@@ -398,7 +395,6 @@ func (srv *Server) handleConnection(conn net.Conn) {
 				continue
 			case "DATA":
 				s.handleData(args)
-				log.Printf("%#v", s)
 				continue
 			default:
 				s.Cmd(500, "Syntax error, command unrecognized")
@@ -407,11 +403,9 @@ func (srv *Server) handleConnection(conn net.Conn) {
 		} else {
 			switch args[0] {
 			case "EHLO":
-				log.Println("Initiated ne EHLO session")
 				s.handleEhlo(args)
 				continue
 			case "HELO":
-				log.Println("Initiated ne HELO session")
 				s.handleHelo(args)
 				continue
 			default:
