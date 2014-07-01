@@ -1,9 +1,10 @@
 package lmail
 
 import (
-	//	"bufio"
 	"bytes"
 	"io"
+	"io/ioutil"
+	"log"
 	"net/mail"
 	"sync"
 )
@@ -76,9 +77,7 @@ type Mail struct {
 	// Slice of reciepients as registered by the client
 	Rcpts []string
 	// Parsed Message
-	Msg *mail.Message
-	// Raw mail as recieved by the server.
-	Raw io.Reader
+	msg *mail.Message
 }
 
 func (m *Mail) PutMessage(raw io.Reader) (err error) {
@@ -91,11 +90,22 @@ func (m *Mail) RawReader() io.Reader {
 }
 
 func (m *Mail) MimeMessage() (msg *mail.Message, err error) {
-	if m.Msg == nil {
+	if m.msg == nil {
 		mailReader := m.RawReader()
 		msg, err = mail.ReadMessage(mailReader)
-		m.Msg = msg
+		m.msg = msg
 		return
 	}
-	return m.Msg, nil
+	return m.msg, nil
+}
+
+type DefaultHandler struct{}
+
+func (d *DefaultHandler) HandleMail(m *Mail) (code int, err error) {
+	n, err := io.Copy(ioutil.Discard, m.RawReader())
+	if err != nil {
+		return 500, err
+	}
+	log.Printf("DefaultHandler: Copied %d bytes to /dev/null", n)
+	return 250, nil
 }

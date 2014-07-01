@@ -351,6 +351,7 @@ func (s *session) serverHello(server string) {
 }
 
 func (srv *Server) handleConnection(conn net.Conn) {
+	t := time.Now()
 	s := NewSession(conn)
 	s.serverHello(srv.Name)
 	s.handle = srv.Handler.HandleMail
@@ -380,6 +381,7 @@ func (srv *Server) handleConnection(conn net.Conn) {
 			continue
 		case "QUIT":
 			s.handleClose()
+			log.Printf("Session Closed %s after start", time.Since(t).String())
 			return
 		case "VRFY":
 			s.handleVrfy(args)

@@ -6,6 +6,8 @@ import (
 	"io/ioutil"
 	"lmail"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 )
 
 type PrintHandler struct {
@@ -13,7 +15,7 @@ type PrintHandler struct {
 }
 
 func (h *PrintHandler) HandleMail(mail *lmail.Mail) (int, error) {
-	log.Printf("Handling new mail from %s", mail.Client)
+	log.Printf("Handling new mail from %s", mail.From)
 	for i := 0; i < 5; i++ {
 		go func() {
 			_, err := mail.MimeMessage()
@@ -38,6 +40,11 @@ func (h *PrintHandler) HandleMail(mail *lmail.Mail) (int, error) {
 
 func main() {
 	log.Println("Starting lmail")
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 	handler := &PrintHandler{}
-	lmail.ListenAndServe(":2525", handler)
+	mux := lmail.NewDefaultMuxer()
+	mux.AddRcptHandler("matti@localhost", handler)
+	lmail.ListenAndServe(":2525", mux)
 }
