@@ -40,11 +40,23 @@ func (h *PrintHandler) HandleMail(mail *lmail.Mail) (int, error) {
 
 func main() {
 	log.Println("Starting lmail")
+	// Start pprof for debugging purposus
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	handler := &PrintHandler{}
+	// Get a new default Mux Handler that only routes mails to given addresses
 	mux := lmail.NewDefaultMuxer()
+	// get the Dummy Print Handler
+	handler := &PrintHandler{}
+	// Register the Print Handler with a given Address at the mux
 	mux.AddRcptHandler("matti@localhost", handler)
+	// Get a new Maildir instance in the current der
+	maildir, err := lmail.NewMaildir("./maildir/")
+	if err != nil {
+		log.Fatal("Error during initialization:", err)
+	}
+	// Register The maildir at the muxer
+	mux.AddRcptHandler("doof@localhost", maildir)
+	// listen on port 2525 with the muxer
 	lmail.ListenAndServe(":2525", mux)
 }

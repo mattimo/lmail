@@ -38,21 +38,14 @@ type Handler interface {
 }
 
 type session struct {
-	// raw network connection
-	conn net.Conn
-	// Textproto context
-	text *textproto.Conn
-	// check if session is still active
-	active bool
-	// check if EHLO/HELO ran yet
-	pastHello bool
-	// server timeout
-	timeout *time.Timer
-	// connection time out
-	timedout bool
-
-	// The mail the is beeing received.
-	mail *Mail
+	conn      net.Conn        // raw network connection
+	text      *textproto.Conn // Textproto context
+	active    bool            // check if session is still active
+	pastHello bool            // check if EHLO/HELO ran yet
+	timeout   *time.Timer     // server timeout
+	timedout  bool            // connection time out
+	mail      *Mail           // The mail the is beeing received.
+	server    *Server
 
 	// Delivery Function
 	handle func(*Mail) (int, error)
@@ -60,17 +53,18 @@ type session struct {
 	Verify func(io.ReadWriter) (bool, error)
 }
 
-func NewSession(conn net.Conn) *session {
+func NewSession(conn net.Conn, server *Server) *session {
 	s := &session{
-		conn: conn,
-		text: textproto.NewConn(conn),
-		mail: &Mail{},
+		conn:   conn,
+		text:   textproto.NewConn(conn),
+		mail:   &Mail{},
+		server: server,
 	}
 	s.reset()
-
-	s.timeout = time.AfterFunc(timeoutTime, s.Close)
+	s.timeout = time.AfterFunc(timeoutTime, func() {
+		s.Close()
+	})
 	return s
-
 }
 
 func (s *session) reset() {
@@ -83,13 +77,14 @@ func (s *session) ResetTimeout() {
 	s.timeout.Reset(timeoutTime)
 }
 
-func (s *session) Close() {
+func (s *session) Close() error {
 	s.timedout = true
 	s.timeout.Stop()
 	err := s.text.Close()
 	if err != nil {
-		log.Println("Erro failed to close Session:", err)
+		return fmt.Errorf("Erro failed to close Session: %s", err)
 	}
+	return nil
 }
 
 func getTouple(field string) (string, string, error) {
@@ -122,14 +117,15 @@ func (s *session) handleHelo(args []string) {
 	s.pastHello = true
 }
 
-func (s *session) replyExtensions(client string) {
+func (s *session) replyExtensions(client string) error {
 	rAddrHostPort := s.conn.RemoteAddr().String()
 	rAddr, _, err := net.SplitHostPort(rAddrHostPort)
 	names, err := net.LookupAddr(rAddr)
+	// TODO: this isnt' very smart but it does the job, we just have to
+	// disconnect if the address can't be lookd up.
 	if err != nil {
-		log.Println("Error During reverse Lookup:", err)
 		s.Cmd(451, "That didn't work")
-		return
+		return fmt.Errorf("Error during reverse lookup: %s", err)
 	}
 	var name string
 	if len(names) == 0 {
@@ -143,17 +139,22 @@ func (s *session) replyExtensions(client string) {
 		s.Ecmd(250, extension)
 	}
 	s.Cmd(250, extensions[len(extensions)-1])
+	return nil
 }
 
-func (s *session) handleEhlo(args []string) {
+func (s *session) handleEhlo(args []string) error {
 	if len(args) < 2 {
 		s.Cmd(553, "mailbox syntax incorrect")
-		return
+		return nil
 	}
 	client := args[1]
 	// TODO: validate URL
-	s.replyExtensions(client)
+	err := s.replyExtensions(client)
+	if err != nil {
+		return err
+	}
 	s.pastHello = true
+	return nil
 }
 
 func (s *session) handleMail(args []string) {
@@ -172,17 +173,14 @@ func (s *session) handleMail(args []string) {
 	}()
 
 	if err != nil {
-		log.Println("MAIL: Error parsing touple:", err)
 		return
 	}
 	if k != "FROM" {
 		err = fmt.Errorf("wrong key name")
-		log.Println("MAIL: Error no \"FROM\" Field:", err)
 		return
 	}
 	from, err := mail.ParseAddress(v)
 	if err != nil {
-		log.Println("MAIL: Error Parsing Address:", err)
 		return
 	}
 	s.mail.From = from.Address
@@ -205,17 +203,14 @@ func (s *session) handleRcpt(args []string) {
 		}
 	}()
 	if err != nil {
-		log.Println("RCPT: Error parsing touple:", err)
 		return
 	}
 	if k != "TO" {
 		err = fmt.Errorf("Wrong key name")
-		log.Println("RCPT: Error no \"TO\" Field:", err)
 		return
 	}
 	rcpt, err := mail.ParseAddress(v)
 	if err != nil {
-		log.Println("RCPT: Error Parsing Address:", err)
 		return
 	}
 	s.mail.Rcpts = append(s.mail.Rcpts, rcpt.Address)
@@ -261,59 +256,30 @@ func (s *session) rcptMimeMatch(header mail.Header) (bool, error) {
 	return true, nil
 }
 
-func (s *session) handleData(args []string) {
+func (s *session) handleData(args []string) error {
 	if s.mail.From == "" {
 		s.Cmd(503, "FROM sequence must come before DATA")
-		return
+		return nil
 	}
 	if len(s.mail.Rcpts) == 0 {
 		s.Cmd(503, "RCPT sequnce must come before DATA")
-		return
+		return nil
 	}
 	s.Cmd(354, "Ready to receive mails end with single . line")
 
-	var readError error
-	defer func() {
-		if readError != nil {
-			log.Println("Error during data receive")
-			s.Cmd(550, readError.Error())
-		} else {
-			s.Cmd(250, "OK")
-		}
-	}()
 	dataReader := s.text.DotReader()
-	err := s.mail.PutMessage(dataReader)
+	s.mail.PutMessage(dataReader)
+
+	code, err := s.handle(s.mail)
 	if err != nil {
-		log.Println("Error reading from con:", err)
-		readError = fmt.Errorf("Error reading data")
-		return
+		s.Cmd(550, "Error reading Data")
+		return fmt.Errorf("Error reading from con: %s", err)
 	}
-	//TODO handle smtp error code
-	_, err = s.handle(s.mail)
-	if err != nil {
-		log.Println("Error reading from con:", err)
-		readError = fmt.Errorf("Error reading data")
+	if code != 250 {
+		s.Cmd(code, "Error during processing")
 	}
-	if false {
-		_, file, err := maildir.StoreTmp(dataReader)
-		if err != nil {
-			log.Println("Error reading from con:", err)
-			readError = fmt.Errorf("Error reading data")
-			return
-		}
-		msg, err := mail.ReadMessage(file)
-		if err != nil {
-			log.Println("Error reading message", err)
-			readError = fmt.Errorf("Error reading data")
-			return
-		}
-		ok, err := s.rcptMimeMatch(msg.Header)
-		if !ok {
-			log.Println("Error matching MIME:", err)
-			readError = fmt.Errorf("Error reading data")
-			return
-		}
-	}
+	s.Cmd(250, "OK")
+	return nil
 }
 
 func (s *session) handleRset(args []string) {
@@ -352,7 +318,7 @@ func (s *session) serverHello(server string) {
 
 func (srv *Server) handleConnection(conn net.Conn) {
 	t := time.Now()
-	s := NewSession(conn)
+	s := NewSession(conn, srv)
 	s.serverHello(srv.Name)
 	s.handle = srv.Handler.HandleMail
 	for s.active {
@@ -361,7 +327,7 @@ func (srv *Server) handleConnection(conn net.Conn) {
 		line, err := s.text.ReadLine()
 		if err != nil {
 			if !s.timedout {
-				log.Println("Error reading line:", err)
+				srv.logf("Error reading line: %s", err)
 			}
 			return
 		}
@@ -381,7 +347,7 @@ func (srv *Server) handleConnection(conn net.Conn) {
 			continue
 		case "QUIT":
 			s.handleClose()
-			log.Printf("Session Closed %s after start", time.Since(t).String())
+			srv.logf("Session Closed %s after start", time.Since(t).String())
 			return
 		case "VRFY":
 			s.handleVrfy(args)
@@ -396,7 +362,10 @@ func (srv *Server) handleConnection(conn net.Conn) {
 				s.handleRcpt(args)
 				continue
 			case "DATA":
-				s.handleData(args)
+				err = s.handleData(args)
+				if err != nil {
+					srv.logf("Error handleData: %s")
+				}
 				continue
 			default:
 				s.Cmd(500, "Syntax error, command unrecognized")
@@ -422,7 +391,7 @@ type Server struct {
 	Handler Handler // handler to invoke, lmail.DefaultServeMux if nil
 	Name    string  // Server name, hostname if emtpy
 
-	// Error Logger, if nil logs are deferred.
+	// Error Logger, if nil logs are sent to os.Stderr.
 	ErrorLog *log.Logger
 }
 
@@ -434,6 +403,9 @@ func (srv *Server) logf(format string, args ...interface{}) {
 	}
 }
 
+// ListenAndServe listens on the TCP network address srv.Addr and then
+// calls Serve to handle requests on incoming connections.  If
+// srv.Addr is blank, ":smtp" is used.
 func (srv *Server) ListenAndServe() error {
 	addr := srv.Addr
 	if addr == "" {
@@ -441,11 +413,14 @@ func (srv *Server) ListenAndServe() error {
 	}
 	listen, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatal("Could not Listen")
+		srv.logf("Could not Listen")
+		return err
 	}
 	return srv.Serve(listen)
 }
 
+// Serve accepts incoming connections on the Listener l, creating a new
+// connection handler goroutine for each and which then calls a handler.
 func (srv *Server) Serve(l net.Listener) error {
 	defer l.Close()
 	if srv.Name == "" {
@@ -458,7 +433,7 @@ func (srv *Server) Serve(l net.Listener) error {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			log.Println("Error During Connect:", err)
+			srv.logf("Error During Connect: %s", err)
 			continue
 		}
 		go srv.handleConnection(conn)
@@ -466,6 +441,35 @@ func (srv *Server) Serve(l net.Listener) error {
 	}
 }
 
+// ListenAndServe Listens on a TCP network address and then calls Serve with
+// the given handler.
+//
+// A trivial example server is:
+//
+// 	import (
+//		"fmt"
+//		"io"
+//		"lmail"
+//	)
+//
+//	type MyHandler struct {}
+//
+//	func (h *MyHandler) HandleMail(m *Mail) (code int, err error) {
+//		var buf []bytes
+//		reader := m.RawReader()
+//		for n, err := reader.Read(buf); n > 0 {
+//			if err != nil && err != io.EOF {
+//				return 501, err
+//			}
+//			fmt.Printnf("%s", buf)
+//		}
+//
+//	}
+//
+//	func main() {
+//		handler := &MyHandler{}
+//		fmt.Println(lmail.ListenAndServe(":2525", handler))
+//	}
 func ListenAndServe(addr string, handler Handler) error {
 	srv := &Server{Addr: addr, Handler: handler}
 	return srv.ListenAndServe()

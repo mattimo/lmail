@@ -9,26 +9,28 @@ import (
 	"sync"
 )
 
+// Takes care of the mail, Buffers it in memory.
 type mailBuffer struct {
-	buf    *bytes.Buffer // Raw Buffer where mail is stored temporarily, NEVER read from this
-	origin io.Reader     // buffer origin
-	tee    io.Reader
-	pos    int64 // reader position
-	rm     *sync.Mutex
+	buf *bytes.Buffer // Raw Buffer where mail is stored temporarily, NEVER read from this
+	// Fancy io.TeeRader, connected to the origin buffer and to buf.
+	// Read from this and the read content is written to buf transparently.
+	tee io.Reader
+	pos int64 // reader position
+	rm  *sync.Mutex
 }
 
 func newMailBuffer(origin io.Reader) *mailBuffer {
 	buf := &bytes.Buffer{}
 	b := &mailBuffer{
-		buf:    buf,
-		origin: origin,
-		tee:    io.TeeReader(origin, buf),
-		rm:     &sync.Mutex{},
+		buf: buf,
+		tee: io.TeeReader(origin, buf),
+		rm:  &sync.Mutex{},
 	}
 	return b
 }
 
-func (b *mailBuffer) Clone() *mailBuffer {
+// Clone a Buffer
+func (b *mailBuffer) clone() *mailBuffer {
 	return &mailBuffer{
 		tee: b.tee,
 		buf: b.buf,
@@ -37,8 +39,9 @@ func (b *mailBuffer) Clone() *mailBuffer {
 	}
 }
 
-// Opportunistic Reader, Reads from origin buffer iff the position has not
-// been read before.
+// Opportunistic Reader, Reads from origin buffer through the tee reader iff
+// the position has not been read before.
+// TODO: get rid of that silly lock.
 func (b *mailBuffer) Read(p []byte) (n int, err error) {
 	b.rm.Lock()
 	n, err = b.tee.Read(p)
@@ -80,15 +83,19 @@ type Mail struct {
 	msg *mail.Message
 }
 
-func (m *Mail) PutMessage(raw io.Reader) (err error) {
+// Put a raw mail to the buffer. Takes an io.Reader as an argument
+func (m *Mail) PutMessage(raw io.Reader) {
 	m.mailBuf = newMailBuffer(raw)
-	return err
 }
 
+// Return a raw Reader for the Message. The returned reader can be read from
+// several goroutines simultaniously.
 func (m *Mail) RawReader() io.Reader {
-	return m.mailBuf.Clone()
+	return m.mailBuf.clone()
 }
 
+// Return The Mime Header from the message. If the header could not be read
+// it returns an error
 func (m *Mail) MimeMessage() (msg *mail.Message, err error) {
 	if m.msg == nil {
 		mailReader := m.RawReader()
@@ -99,13 +106,16 @@ func (m *Mail) MimeMessage() (msg *mail.Message, err error) {
 	return m.msg, nil
 }
 
-type DefaultHandler struct{}
+// Simple Null Handler. This Handler reads from the raw buffer until io.EOF
+// and discards the readers contents.
+type NullHandler struct{}
 
-func (d *DefaultHandler) HandleMail(m *Mail) (code int, err error) {
+// Handler that just discards the mail.
+func (d *NullHandler) HandleMail(m *Mail) (code int, err error) {
 	n, err := io.Copy(ioutil.Discard, m.RawReader())
 	if err != nil {
 		return 500, err
 	}
-	log.Printf("DefaultHandler: Copied %d bytes to /dev/null", n)
+	log.Printf("NullHandler: Copied %d bytes to /dev/null", n)
 	return 250, nil
 }
