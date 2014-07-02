@@ -4,7 +4,7 @@ import (
 	//	"fmt"
 	"io"
 	"io/ioutil"
-	"lmail"
+	"github.com/mattimo/lmail"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
