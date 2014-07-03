@@ -413,7 +413,7 @@ func (srv *Server) ListenAndServe() error {
 	}
 	listen, err := net.Listen("tcp", addr)
 	if err != nil {
-		srv.logf("Could not Listen")
+		srv.logf("Could not Listen: %s", err)
 		return err
 	}
 	return srv.Serve(listen)
