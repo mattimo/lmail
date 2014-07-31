@@ -1,6 +1,7 @@
 package lmail
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -12,11 +13,8 @@ import (
 	"time"
 )
 
-// servers name as stated in the initial connect 250
-const serverName string = "ini1.ini.physik.tu-berlin.de"
-
 // preliminary location to store extension list supported by the server
-var extensions []string = []string{"8BITMIME", "SIZE"}
+var extensions []string = []string{"8BITMIME", "SIZE", "STARTTLS"}
 
 // The server timour is set to 5 minuted as proposed in rfc5321 4.5.3.2.7.
 const timeoutTime time.Duration = 5 * time.Minute
@@ -42,10 +40,11 @@ type session struct {
 	text      *textproto.Conn // Textproto context
 	active    bool            // check if session is still active
 	pastHello bool            // check if EHLO/HELO ran yet
+	starttls  bool            // true if tls session
 	timeout   *time.Timer     // server timeout
 	timedout  bool            // connection time out
 	mail      *Mail           // The mail the is beeing received.
-	server    *Server
+	server    *Server         // The server whom initiated the session
 
 	// Delivery Function
 	handle func(*Mail) (int, error)
@@ -134,7 +133,7 @@ func (s *session) replyExtensions(client string) error {
 		name = names[0]
 	}
 	s.mail.Client = name
-	s.Ecmd(250, "%s, Hello %s [%s]", serverName, name, rAddr)
+	s.Ecmd(250, "%s, Hello %s [%s]", s.server.Name, name, rAddr)
 	for _, extension := range extensions[:1] {
 		s.Ecmd(250, extension)
 	}
@@ -316,11 +315,17 @@ func (s *session) serverHello(server string) {
 	s.Cmd(220, "%s ESMTP lmail", server)
 }
 
-func (srv *Server) handleConnection(conn net.Conn) {
+func (srv *Server) handleConnection(conn net.Conn, starttls bool) {
 	t := time.Now()
 	s := NewSession(conn, srv)
-	s.serverHello(srv.Name)
+	s.starttls = starttls
 	s.handle = srv.Handler.HandleMail
+
+	if !s.starttls {
+		s.serverHello(srv.Name)
+	} else {
+		srv.logf("Starttls session with %s", conn.RemoteAddr())
+	}
 	for s.active {
 		// reset timeout to prevent clients from dangling around
 		s.ResetTimeout()
@@ -364,9 +369,21 @@ func (srv *Server) handleConnection(conn net.Conn) {
 			case "DATA":
 				err = s.handleData(args)
 				if err != nil {
-					srv.logf("Error handleData: %s")
+					srv.logf("Error handleData: %s", err)
 				}
 				continue
+			case "STARTTLS":
+				if !s.starttls {
+					s.Cmd(220, "Go ahead")
+					err = srv.startTls(conn)
+					if err != nil {
+						srv.logf("Error startTls: %s", err)
+						s.Cmd(454, "Could not start TLS")
+						continue
+					} else {
+						return
+					}
+				}
 			default:
 				s.Cmd(500, "Syntax error, command unrecognized")
 				continue
@@ -386,10 +403,28 @@ func (srv *Server) handleConnection(conn net.Conn) {
 	}
 }
 
+func (srv *Server) startTls(conn net.Conn) error {
+	if srv.TLSConfig == nil {
+		return fmt.Errorf("TLS Config was not set")
+	}
+	tlsConn := tls.Server(conn, srv.TLSConfig)
+	err := tlsConn.Handshake()
+	if err != nil {
+		return err
+	}
+	srv.handleConnection(tlsConn, true)
+	return nil
+
+}
+
 type Server struct {
 	Addr    string  //TCP address to listen on, ":smtp" if empty
 	Handler Handler // handler to invoke, lmail.DefaultServeMux if nil
 	Name    string  // Server name, hostname if emtpy
+
+	// TLS config to use when a starttls session is initiated by the
+	// client if nil, starttls will fail.
+	TLSConfig *tls.Config
 
 	// Error Logger, if nil logs are sent to os.Stderr.
 	ErrorLog *log.Logger
@@ -419,6 +454,43 @@ func (srv *Server) ListenAndServe() error {
 	return srv.Serve(listen)
 }
 
+// ListenAndServeTLS listens on the TCP network address srv.Addr and
+// then calls Serve With startls enabled to handle requests on
+// incoming connections.
+//
+// Filenames containing a certificate and matching private key for
+// the server must be provided. If the certificate is signed by a
+// certificate authority, the certFile should be the concatenation
+// of the server's certificate followed by the CA's certificate.
+//
+// If srv.Addr is blank, ":smtp" is used. if there is an error parsing
+// the certificates, we return an errror
+func (srv *Server) ListenAndServeTLS(certFile, keyFile string) error {
+	addr := srv.Addr
+	if addr == "" {
+		addr = ":smtp"
+	}
+	config := &tls.Config{}
+	if srv.TLSConfig != nil {
+		*config = *srv.TLSConfig
+	}
+
+	var err error
+	config.Certificates = make([]tls.Certificate, 1)
+	config.Certificates[0], err = tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return err
+	}
+
+	srv.TLSConfig = config
+	listen, err := net.Listen("tcp", addr)
+	if err != nil {
+		srv.logf("Could not Listen: %s", err)
+		return err
+	}
+	return srv.Serve(listen)
+}
+
 // Serve accepts incoming connections on the Listener l, creating a new
 // connection handler goroutine for each and which then calls a handler.
 func (srv *Server) Serve(l net.Listener) error {
@@ -436,7 +508,7 @@ func (srv *Server) Serve(l net.Listener) error {
 			srv.logf("Error During Connect: %s", err)
 			continue
 		}
-		go srv.handleConnection(conn)
+		go srv.handleConnection(conn, false)
 
 	}
 }
@@ -473,4 +545,47 @@ func (srv *Server) Serve(l net.Listener) error {
 func ListenAndServe(addr string, handler Handler) error {
 	srv := &Server{Addr: addr, Handler: handler}
 	return srv.ListenAndServe()
+}
+
+// ListenAndServeTLS is the STARTTLS enabled clone of ListenAndServe Listens
+// on a TCP network address and then calls Serve with the given handler.
+// Additionally, files containing a certificate and
+// matching private key for the server must be provided. If the certificate
+// is signed by a certificate authority, the certFile should be the concatenation
+// of the server's certificate followed by the CA's certificate.
+//
+// A trivial example server is:
+//
+// 	import (
+//		"fmt"
+//		"io"
+//		"lmail"
+//	)
+//
+//	type MyHandler struct {}
+//
+//	func (h *MyHandler) HandleMail(m *Mail) (code int, err error) {
+//		var buf []bytes
+//		reader := m.RawReader()
+//		for n, err := reader.Read(buf); n > 0 {
+//			if err != nil && err != io.EOF {
+//				return 501, err
+//			}
+//			fmt.Printnf("%s", buf)
+//		}
+//
+//	}
+//
+//	func main() {
+//		handler := &MyHandler{}
+//		err := lmail.ListenAndServeTLS(":2525", "server.pen", server.key, handler)
+//		if err != nil {
+//			fmt.Println("Server Failure:", err)
+//		}
+//	}
+//
+// One can use generate_cert.go in crypto/tls to generate cert.pem and key.pem.
+func ListenAndServeTLS(addr, certFile, keyFile string, handler Handler) error {
+	srv := &Server{Addr: addr, Handler: handler}
+	return srv.ListenAndServeTLS(certFile, keyFile)
 }
