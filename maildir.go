@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-const CreateMode os.FileMode = 0700
+// MaildirCreateMode is the mode that is used to create the maildir tree
+// structure.
+var MaildirCreateMode os.FileMode = 0700
 
 // Maildir is a mail Handler That saves into a maildir. Maildir is an easy way
 // to store mails. For reference how to retrieve mail from a maildir refer to:
@@ -45,17 +47,17 @@ func NewMaildir(dir string) (*Maildir, error) {
 }
 
 func (m *Maildir) create() error {
-	err := os.MkdirAll(m.directory+"/tmp", CreateMode)
+	err := os.MkdirAll(m.directory+"/tmp", MaildirCreateMode)
 	if err != nil {
 		err = fmt.Errorf("error creating directory tmp: %s", err)
 		return err
 	}
-	err = os.MkdirAll(m.directory+"/cur", CreateMode)
+	err = os.MkdirAll(m.directory+"/cur", MaildirCreateMode)
 	if err != nil {
 		err = fmt.Errorf("error creating directory cur: %s", err)
 		return err
 	}
-	err = os.MkdirAll(m.directory+"/new", CreateMode)
+	err = os.MkdirAll(m.directory+"/new", MaildirCreateMode)
 	if err != nil {
 		err = fmt.Errorf("error creating directory new: %s", err)
 		return err
@@ -84,7 +86,7 @@ func (m *Maildir) StoreTmp(reader io.Reader) (int64, *os.File, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	err = file.Chmod(CreateMode)
+	err = file.Chmod(MaildirCreateMode)
 	if err != nil {
 		return 0, nil, err
 	}
