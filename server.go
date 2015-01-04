@@ -266,8 +266,9 @@ func (s *session) handleData(args []string) error {
 		s.ErrCmd(CodeNotTaken)
 		return fmt.Errorf("Error reading from con: %s", err)
 	}
-	if code != CodeOk {
+	if code != 0 && code != CodeOk {
 		s.Cmd(code, "Error during processing")
+		return nil
 	}
 	s.Cmd(CodeOk, "OK")
 	return nil
