@@ -47,17 +47,17 @@ func NewMaildir(dir string) (*Maildir, error) {
 func (m *Maildir) create() error {
 	err := os.MkdirAll(m.directory+"/tmp", CreateMode)
 	if err != nil {
-		err = fmt.Errorf("Error creating directory tmp: %s", err)
+		err = fmt.Errorf("error creating directory tmp: %s", err)
 		return err
 	}
 	err = os.MkdirAll(m.directory+"/cur", CreateMode)
 	if err != nil {
-		err = fmt.Errorf("Error creating directory cur: %s", err)
+		err = fmt.Errorf("error creating directory cur: %s", err)
 		return err
 	}
 	err = os.MkdirAll(m.directory+"/new", CreateMode)
 	if err != nil {
-		err = fmt.Errorf("Error creating directory new: %s", err)
+		err = fmt.Errorf("error creating directory new: %s", err)
 		return err
 	}
 	return nil

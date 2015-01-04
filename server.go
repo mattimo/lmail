@@ -81,7 +81,7 @@ func (s *session) Close() error {
 	s.timeout.Stop()
 	err := s.text.Close()
 	if err != nil {
-		return fmt.Errorf("Erro failed to close Session: %s", err)
+		return fmt.Errorf("failed to close Session: %s", err)
 	}
 	return nil
 }
@@ -89,7 +89,7 @@ func (s *session) Close() error {
 func getTouple(field string) (string, string, error) {
 	kv := strings.Split(field, ":")
 	if len(kv) != 2 {
-		return "", "", fmt.Errorf("No fields found")
+		return "", "", fmt.Errorf("no fields found")
 	}
 	return kv[0], kv[1], nil
 }
@@ -124,7 +124,7 @@ func (s *session) replyExtensions(client string) error {
 	// disconnect if the address can't be lookd up.
 	if err != nil {
 		s.Cmd(CodeAborted, "That didn't work")
-		return fmt.Errorf("Error during reverse lookup: %s", err)
+		return fmt.Errorf("reverse lookup failed: %s", err)
 	}
 	var name string
 	if len(names) == 0 {
@@ -242,7 +242,7 @@ func (s *session) rcptMimeMatch(header mail.Header) (bool, error) {
 		}
 	}
 	if count != 0 {
-		return false, fmt.Errorf("Recepient mismatch for %d RCPTs", count)
+		return false, fmt.Errorf("recepient mismatch for %d RCPTs", count)
 	}
 	return true, nil
 }
@@ -264,7 +264,7 @@ func (s *session) handleData(args []string) error {
 	code, err := s.handle(s.mail)
 	if err != nil {
 		s.ErrCmd(CodeNotTaken)
-		return fmt.Errorf("Error reading from con: %s", err)
+		return fmt.Errorf("failed to handle mail: %s", err)
 	}
 	if code != 0 && code != CodeOk {
 		s.Cmd(code, "Error during processing")
