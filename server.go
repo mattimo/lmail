@@ -310,6 +310,14 @@ func (s *session) Ecmd(code int, message string, args ...interface{}) error {
 	return s.text.PrintfLine(pmsg, args...)
 }
 
+func (s *session) ErrCmd(code int) error {
+	msg, ok := SmtpErrors[code]
+	if !ok {
+		return s.Cmd(code, "")
+	}
+	return s.Cmd(code, msg)
+}
+
 // TODO: certainly not the correct name
 func (s *session) serverHello(server string) {
 	s.Cmd(220, "%s ESMTP lmail", server)
