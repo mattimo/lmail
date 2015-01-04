@@ -163,26 +163,22 @@ func (s *session) handleMail(args []string) {
 		return
 	}
 	k, v, err := getTouple(args[1])
-	defer func() {
-		if err != nil {
-			s.Cmd(553, "mailbox syntax incorrect")
-		} else {
-			s.Cmd(250, "OK")
-		}
-	}()
-
 	if err != nil {
+		s.ErrCmd(CodeSyntaxError)
 		return
 	}
+
 	if k != "FROM" {
-		err = fmt.Errorf("wrong key name")
+		s.ErrCmd(CodeSyntaxError)
 		return
 	}
 	from, err := mail.ParseAddress(v)
 	if err != nil {
+		s.ErrCmd(CodeMailboxNameNotAllowed)
 		return
 	}
 	s.mail.From = from.Address
+	s.Cmd(CodeOk, "OK")
 	return
 
 }
@@ -194,25 +190,21 @@ func (s *session) handleRcpt(args []string) {
 		return
 	}
 	k, v, err := getTouple(args[1])
-	defer func() {
-		if err != nil {
-			s.Cmd(553, "mailbox syntax incorrect")
-		} else {
-			s.Cmd(250, "OK")
-		}
-	}()
 	if err != nil {
+		s.ErrCmd(CodeSyntaxError)
 		return
 	}
 	if k != "TO" {
-		err = fmt.Errorf("Wrong key name")
+		s.ErrCmd(CodeSyntaxError)
 		return
 	}
 	rcpt, err := mail.ParseAddress(v)
 	if err != nil {
+		s.ErrCmd(CodeMailboxNameNotAllowed)
 		return
 	}
 	s.mail.Rcpts = append(s.mail.Rcpts, rcpt.Address)
+	s.Cmd(CodeOk, "OK")
 	return
 
 }
