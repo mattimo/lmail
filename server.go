@@ -101,18 +101,18 @@ func getAddress(value string) string {
 
 func (s *session) handleClose() {
 	s.active = false
-	s.Cmd(221, "OK")
+	s.Cmd(CodeClosing, "OK")
 	s.Close()
 }
 
 func (s *session) handleHelo(args []string) {
 	if len(args) < 2 {
-		s.Cmd(553, "mailbox syntax incorrect")
+		s.ErrCmd(CodeSyntaxError)
 		return
 	}
 	client := args[1]
 	// TODO: validate URL
-	s.Cmd(250, "Hello %s, use EHLO, motherfucker.", client)
+	s.Cmd(CodeOk, "Hello %s, use EHLO, motherfucker.", client)
 	s.pastHello = true
 }
 
@@ -123,7 +123,7 @@ func (s *session) replyExtensions(client string) error {
 	// TODO: this isnt' very smart but it does the job, we just have to
 	// disconnect if the address can't be lookd up.
 	if err != nil {
-		s.Cmd(451, "That didn't work")
+		s.Cmd(CodeAborted, "That didn't work")
 		return fmt.Errorf("Error during reverse lookup: %s", err)
 	}
 	var name string
@@ -133,17 +133,17 @@ func (s *session) replyExtensions(client string) error {
 		name = names[0]
 	}
 	s.mail.Client = name
-	s.Ecmd(250, "%s, Hello %s [%s]", s.server.Name, name, rAddr)
+	s.Ecmd(CodeOk, "%s, Hello %s [%s]", s.server.Name, name, rAddr)
 	for _, extension := range extensions[:1] {
-		s.Ecmd(250, extension)
+		s.Ecmd(CodeOk, extension)
 	}
-	s.Cmd(250, extensions[len(extensions)-1])
+	s.Cmd(CodeOk, extensions[len(extensions)-1])
 	return nil
 }
 
 func (s *session) handleEhlo(args []string) error {
 	if len(args) < 2 {
-		s.Cmd(553, "mailbox syntax incorrect")
+		s.ErrCmd(CodeSyntaxError)
 		return nil
 	}
 	client := args[1]
@@ -159,7 +159,7 @@ func (s *session) handleEhlo(args []string) error {
 func (s *session) handleMail(args []string) {
 	// check from field
 	if len(args) < 2 {
-		s.Cmd(553, "mailbox syntax incorrect")
+		s.ErrCmd(CodeSyntaxError)
 		return
 	}
 	k, v, err := getTouple(args[1])
@@ -190,7 +190,7 @@ func (s *session) handleMail(args []string) {
 func (s *session) handleRcpt(args []string) {
 	// check recepient
 	if len(args) < 2 {
-		s.Cmd(553, "mailbox syntax incorrect")
+		s.ErrCmd(CodeSyntaxError)
 		return
 	}
 	k, v, err := getTouple(args[1])
@@ -257,43 +257,43 @@ func (s *session) rcptMimeMatch(header mail.Header) (bool, error) {
 
 func (s *session) handleData(args []string) error {
 	if s.mail.From == "" {
-		s.Cmd(503, "FROM sequence must come before DATA")
+		s.Cmd(CodeBadSequence, "FROM sequence must come before DATA")
 		return nil
 	}
 	if len(s.mail.Rcpts) == 0 {
-		s.Cmd(503, "RCPT sequnce must come before DATA")
+		s.Cmd(CodeBadSequence, "RCPT sequnce must come before DATA")
 		return nil
 	}
-	s.Cmd(354, "Ready to receive mails end with single . line")
+	s.Cmd(CodeStartMailInput, "Ready to receive mails end with single . line")
 
 	dataReader := s.text.DotReader()
 	s.mail.PutMessage(dataReader)
 
 	code, err := s.handle(s.mail)
 	if err != nil {
-		s.Cmd(550, "Error reading Data")
+		s.ErrCmd(CodeNotTaken)
 		return fmt.Errorf("Error reading from con: %s", err)
 	}
-	if code != 250 {
+	if code != CodeOk {
 		s.Cmd(code, "Error during processing")
 	}
-	s.Cmd(250, "OK")
+	s.Cmd(CodeOk, "OK")
 	return nil
 }
 
 func (s *session) handleRset(args []string) {
 	s.reset()
-	s.Cmd(250, "OK")
+	s.Cmd(CodeOk, "OK")
 }
 
 func (s *session) handleNoop(args []string) {
-	s.Cmd(250, "OK")
+	s.Cmd(CodeOk, "OK")
 }
 
 func (s *session) handleVrfy(args []string) {
 	// TODO: implement real vrfy, just pretend that we prohibit this
 	// behaviour by policy
-	s.Cmd(252, "Administrative prohibition")
+	s.Cmd(CodeUserNoVerify, "Administrative prohibition")
 }
 
 // send Normal Command with number and command text
@@ -320,7 +320,7 @@ func (s *session) ErrCmd(code int) error {
 
 // TODO: certainly not the correct name
 func (s *session) serverHello(server string) {
-	s.Cmd(220, "%s ESMTP lmail", server)
+	s.Cmd(CodeReady, "%s ESMTP lmail", server)
 }
 
 func (srv *Server) handleConnection(conn net.Conn, starttls bool) {
@@ -382,18 +382,18 @@ func (srv *Server) handleConnection(conn net.Conn, starttls bool) {
 				continue
 			case "STARTTLS":
 				if !s.starttls {
-					s.Cmd(220, "Go ahead")
+					s.Cmd(CodeReady, "Go ahead")
 					err = srv.startTls(conn)
 					if err != nil {
 						srv.logf("Error startTls: %s", err)
-						s.Cmd(454, "Could not start TLS")
+						s.Cmd(CodeTlsNotAvaiable, "Could not start TLS")
 						continue
 					} else {
 						return
 					}
 				}
 			default:
-				s.Cmd(500, "Syntax error, command unrecognized")
+				s.ErrCmd(CodeNotRecognized)
 				continue
 			}
 		} else {
@@ -405,7 +405,7 @@ func (srv *Server) handleConnection(conn net.Conn, starttls bool) {
 				s.handleHelo(args)
 				continue
 			default:
-				s.Cmd(503, "Hello must come before anything else")
+				s.Cmd(CodeBadSequence, "Hello must come before anything else")
 			}
 		}
 	}
