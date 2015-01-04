@@ -14,7 +14,7 @@ import (
 )
 
 // preliminary location to store extension list supported by the server
-var extensions []string = []string{"8BITMIME", "SIZE", "STARTTLS"}
+var extensions = []string{"8BITMIME", "SIZE", "STARTTLS"}
 
 // The server timour is set to 5 minuted as proposed in rfc5321 4.5.3.2.7.
 const timeoutTime time.Duration = 5 * time.Minute
