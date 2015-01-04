@@ -25,7 +25,7 @@ const processingTimeout time.Duration = 8 * time.Hour
 // Maildir instance, shall contain folder name
 var maildir *Maildir
 
-// Mail Handlers Process Mails,
+// Handler interface
 type Handler interface {
 	// Handles Mails, gets passed a mail struct as an argument, and should return
 	// an smtp error, and an error object for all other errors.
@@ -418,6 +418,7 @@ func (srv *Server) startTls(conn net.Conn) error {
 
 }
 
+// Server type that implements a simple smtp server
 type Server struct {
 	Addr    string  //TCP address to listen on, ":smtp" if empty
 	Handler Handler // handler to invoke, lmail.DefaultServeMux if nil

@@ -11,8 +11,8 @@ import (
 
 const CreateMode os.FileMode = 0700
 
-// A mail Handler That saves into a maildir. Maildir is an easy way to store
-// mails. For reference how to retrieve mail from a maildir refer to:
+// Maildir is a mail Handler That saves into a maildir. Maildir is an easy way
+// to store mails. For reference how to retrieve mail from a maildir refer to:
 // 	http://cr.yp.to/proto/maildir.html
 // This maildir implementation is supposed to read incoming mails from the
 // receiving Socket into a new File in the maildirs /tmp directory and then
@@ -32,9 +32,9 @@ func createUniqueName() (string, error) {
 	return fmt.Sprintf("%d.%d.%s", unixNano, pid, hostname), nil
 }
 
-// Create a new Maildir at the given location. If the underlying directory
-// structure does not exist, it is created. It returns a usable maildir struct
-// and any errors the occure during initialisation.
+// NewMaildir creates a new maildir at the given location. If the underlying
+// directory structure does not exist, it is created. It returns a usable
+// maildir struct and any errors the occure during initialisation.
 func NewMaildir(dir string) (*Maildir, error) {
 	m := &Maildir{directory: dir}
 	err := m.create()
@@ -72,8 +72,8 @@ func (m *Maildir) Deliver(f string) error {
 
 }
 
-// Store a mail in the maildir. takes a reader and returns how many bytes
-// where read and an error
+// StoreTmp stores a mail in the maildir. takes a reader and returns how many
+// bytes where read and an error
 func (m *Maildir) StoreTmp(reader io.Reader) (int64, *os.File, error) {
 	unique, err := createUniqueName()
 	if err != nil {
@@ -100,7 +100,7 @@ func (m *Maildir) StoreTmp(reader io.Reader) (int64, *os.File, error) {
 	return n, file, nil
 }
 
-// Simple Handler, for mails that shall be stored.
+// HandleMail is a simple handler, for mails that shall be stored.
 func (m *Maildir) HandleMail(mail *Mail) (code int, err error) {
 	_, f, err := m.StoreTmp(mail.RawReader())
 	if err != nil {

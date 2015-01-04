@@ -66,8 +66,10 @@ func (b *mailBuffer) Read(p []byte) (n int, err error) {
 	return
 }
 
+// Mail type represents mail data and is passed between handlers.
+//
 // Data is only read from the connection when it is read from either the
-//message Body or the Raw reader.
+// message Body or the Raw reader.
 type Mail struct {
 	mailBuf *mailBuffer
 	// Server Client name. We use the reverse Lookup of the client
@@ -83,19 +85,19 @@ type Mail struct {
 	msg *mail.Message
 }
 
-// Put a raw mail to the buffer. Takes an io.Reader as an argument
+// PutMessage puts a raw mail to the buffer. Takes an io.Reader as an argument.
 func (m *Mail) PutMessage(raw io.Reader) {
 	m.mailBuf = newMailBuffer(raw)
 }
 
-// Return a raw Reader for the Message. The returned reader can be read from
-// several goroutines simultaniously.
+// RawReader returns a raw Reader for the Message. The returned reader can be 
+// read from several goroutines simultaniously.
 func (m *Mail) RawReader() io.Reader {
 	return m.mailBuf.clone()
 }
 
-// Return The Mime Header from the message. If the header could not be read
-// it returns an error
+// MimeMessage returns the mime header from the message. If the header could
+// not be read it returns an error.
 func (m *Mail) MimeMessage() (msg *mail.Message, err error) {
 	if m.msg == nil {
 		mailReader := m.RawReader()
@@ -106,11 +108,11 @@ func (m *Mail) MimeMessage() (msg *mail.Message, err error) {
 	return m.msg, nil
 }
 
-// Simple Null Handler. This Handler reads from the raw buffer until io.EOF
-// and discards the readers contents.
+// NullHandler is a simple handler that discards the mail. This Handler reads
+// from the raw buffer until io.EOF and discards the readers contents.
 type NullHandler struct{}
 
-// Handler that just discards the mail.
+// HandleMail callback that just discards the mail.
 func (d *NullHandler) HandleMail(m *Mail) (code int, err error) {
 	n, err := io.Copy(ioutil.Discard, m.RawReader())
 	if err != nil {
