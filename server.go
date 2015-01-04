@@ -52,7 +52,7 @@ type session struct {
 	Verify func(io.ReadWriter) (bool, error)
 }
 
-func NewSession(conn net.Conn, server *Server) *session {
+func newSession(conn net.Conn, server *Server) *session {
 	s := &session{
 		conn:   conn,
 		text:   textproto.NewConn(conn),
